@@ -152,12 +152,16 @@ class KTH:
 
 def _generate_image_example(drawing, image_file, position=np.r_[0.0, 0.0],
                             scale=1.0, center=np.r_[0.0, 0.0]):
-    segs = polylines_to_cleaned_segments(path_to_polylines(drawing),
+    from .polylines import split_segments
+    segs_full = split_segments(path_to_polylines(drawing))
+    segs = polylines_to_cleaned_segments(segs_full,
                                          trunc_dist=config.truncation_dist,
                                          max_seg_len=config.max_seg_len)
-    qsegs = quant.quantize((segs - center) / scale)
+    segs_norm = (segs - center) / scale
+    segs_quant = quant.quantize(segs_norm, check=False)
+    triplets = _qsegs_to_trips(segs_quant)
     point = quant.quantize((np.array(position) - center) / scale)
-    qsegs_near, _, qdists = sorted_segments(qsegs, point)
+    qsegs_near, _, qdists = sorted_segments(segs_quant, point)
 
     image = im_io.imread(image_file)
     if image.dtype == np.uint8:
@@ -167,8 +171,12 @@ def _generate_image_example(drawing, image_file, position=np.r_[0.0, 0.0],
     image = image[::step, ::step, :]
     assert image.shape == config.image_shape
 
-    return Example(position=point, drawing=drawing, image=image,
-                   triplets=_qsegs_to_trips(qsegs_near))
+    ex = Example(position=point, drawing=drawing, image=image, triplets=triplets)
+    ex.segs_norm  = segs_norm
+    ex.segs_quant = segs_quant
+    ex.segs_full = (segs_full - center) / scale
+    return ex
+
 
 
 class Matterport:
@@ -282,7 +290,7 @@ class Zillow:
         return f'{bs} buildings in Zillow'
 
     def building_floorplans(self, data, building_path, coord_sys='image', ax=None,
-                      floors=None, rooms=None, tol=5e-8) -> List[Example]:
+                            floors=None, rooms=None, tol=5e-8) -> List[Example]:
         floorplan_examples = []
 
         for floor in data["redraw"]:
@@ -306,7 +314,6 @@ class Zillow:
             rooms_floor = rooms if rooms is not None else data["redraw"][floor].keys()
             #doors = np.array([door for room in rooms_floor for door in data["redraw"][floor][room]["doors"]])
 
-            room_examples = []
             for room in rooms_floor:
 
                 vertices = np.array(data["redraw"][floor][room]["vertices"])
@@ -370,7 +377,7 @@ class Zillow:
                 path = builder.to_path()
                 path = path.transformed(tra)
 
-                patch = patches.PathPatch(path, lw=1, facecolor='none')
+                #patch = patches.PathPatch(path, lw=1, facecolor='none')
 
                 segs = polylines_to_cleaned_segments(path_to_polylines(path),
                                                     trunc_dist=config.truncation_dist,
